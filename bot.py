@@ -324,7 +324,7 @@ async def send_now_confirm(update, ctx):
         return
 
     ch_name, ch_id = get_channel()
-    bot = update.callback_query.bot
+    bot = ctx.bot
 
     try:
         # Send image + text
@@ -599,7 +599,7 @@ async def music_received(update, ctx, message):
         return
 
     # Download file
-    file = await message.bot.get_file(audio.file_id)
+    file = await ctx.bot.get_file(audio.file_id)
     ext = os.path.splitext(file.file_path)[1] or ".mp3"
     tmp_path = TEMP_DIR / f"{uuid.uuid4().hex}{ext}"
     await file.download_to_drive(str(tmp_path))
@@ -1193,7 +1193,7 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         photo = message.photo[-1] if message.photo else None
         if photo:
             # Download cover
-            file = await message.bot.get_file(photo.file_id)
+            file = await ctx.bot.get_file(photo.file_id)
             cover_path = str(TEMP_DIR / f"cover_{uuid.uuid4().hex}.jpg")
             await file.download_to_drive(cover_path)
 
