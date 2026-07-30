@@ -1,3 +1,14 @@
+# Admin Channel Bot - Dependencies
+# وابستگی‌های ربات ادمین کانال
+
+# Telegram Bot API
+# API ربات تلگرام
 python-telegram-bot>=20.0
+
+# Audio metadata handling (ID3 tags, cover art)
+# مدیریت متادیتای صوتی (تگ‌های ID3، کاور آرت)
 mutagen>=1.47.0
+
+# HTTP requests for Spotify API
+# درخواست‌های HTTP برای API اسپاتیفای
 requests>=2.31.0

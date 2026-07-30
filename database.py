@@ -1,5 +1,17 @@
 """
 Database module - SQLite storage for Admin Channel Bot
+ماژول پایگاه داده - ذخیره‌سازی SQLite برای ربات ادمین کانال
+
+Tables / جداول:
+- config: Key-value configuration storage / ذخیره‌سازی تنظیمات کلید-مقدار
+- templates: Message templates / قالب‌های پیام
+- schedules: Scheduled sends / زمان‌بندی ارسال
+
+Functions / توابع:
+- init(): Initialize database / مقداردهی اولیه دیتابیس
+- get/put: Config operations / عملیات تنظیمات
+- add/get/update/delete_template: Template CRUD / عملیات قالب
+- add/get/update/delete_schedule: Schedule CRUD / عملیات زمان‌بندی
 """
 import sqlite3
 import json

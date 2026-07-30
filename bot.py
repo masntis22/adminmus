@@ -2,6 +2,26 @@
 """
 Admin Channel Bot v1
 ربات ادمین مدیریت کانال تلگرام
+
+Features / امکانات:
+- Send configured messages to channel (image + text + music)
+  ارسال پیام کانفیگ شده به کانال (عکس + متن + موزیک)
+- Schedule daily sends at specific times
+  زمان‌بندی ارسال روزانه در ساعات مشخص
+- Edit music metadata (title, artist, cover art)
+  ویرایش متادیتای موزیک (عنوان، هنرمند، کاور آرت)
+- Config management (CRUD for message templates)
+  مدیریت تنظیمات (ساخت، ویرایش، حذف پیام‌ها)
+
+Requirements / پیش‌نیازها:
+- Python 3.8+ / پایتون 3.8 به بالا
+- Telegram Bot Token / توکن ربات تلگرام
+- Bot must be admin in channel / ربات باید ادمین کانال باشه
+
+Usage / نحوه استفاده:
+    export BOT_TOKEN="your_token"
+    export ADMIN_IDS="633606748,5008894513"
+    python3 bot.py
 """
 
 import os

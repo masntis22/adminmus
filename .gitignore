@@ -1,6 +1,45 @@
+# Admin Channel Bot - Git Ignore Rules
+# قوانین نادیده گرفتن فایل‌ها
+
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Bot Data (contains user data and database)
+# اطلاعات ربات (شامل اطلاعات کاربران و دیتابیس)
 bot_data/
-temp/
-.env
 *.db
+
+# Temp files (downloaded audio, cover art)
+# فایل‌های موقت (موزیک دانلود شده، کاور آرت)
+temp/
+
+# Environment variables
+# متغیرهای محیطی
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Downloaded audio files
+# فایل‌های صوتی دانلود شده
+*.mp3
+*.m4a
+*.flac
+*.wav
