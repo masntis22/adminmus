@@ -171,9 +171,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("sch_add_"):
         time_val = data.split("_")[-1]
         await schedule_add_time(update, ctx, time_val)
-    elif data.startswith("sch_del_"):
-        time_val = data.split("_")[-1]
-        await schedule_del_time(update, ctx, time_val)
     elif data == "sch_save":
         await schedule_save(update, ctx)
     elif data == "sch_cancel":
@@ -186,11 +183,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sch_id = int(data.split("_")[-1])
         await schedule_toggle(update, ctx, sch_id)
     elif data.startswith("sch_del_"):
-        if data.startswith("sch_deltime_"):
-            pass  # handled above
-        else:
-            sch_id = int(data.split("_")[-1])
-            await schedule_delete(update, ctx, sch_id)
+        sch_id = int(data.split("_")[-1])
+        await schedule_delete(update, ctx, sch_id)
 
     # ── Music edit flow ──
     elif data == "music_change_title":
@@ -234,6 +228,32 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("cfg_delmus_"):
         tpl_id = int(data.split("_")[-1])
         await config_delete_music(update, ctx, tpl_id)
+
+    # ── Schedule new ──
+    elif data == "sch_new":
+        templates = db.get_templates()
+        if not templates:
+            await query.edit_message_text(
+                "❌ **هنوز پیامی کانفیگ نشده!**\n\n"
+                "ابتدا از بخش «تنظیمات پیام‌ها» یک پیام بسازید.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⚙️ تنظیمات پیام‌ها", callback_data="config")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")],
+                ]),
+            )
+            return
+
+        rows = []
+        for t in templates:
+            rows.append([InlineKeyboardButton(f"📋 {t['name']}", callback_data=f"sch_tpl_{t['id']}")])
+        rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="schedule")])
+
+        await query.edit_message_text(
+            "⏰ **زمان‌بندی جدید**\n\nیک پیام رو انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -382,55 +402,6 @@ async def flow_schedule(update, ctx):
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode=ParseMode.MARKDOWN,
     )
-
-
-# Handle "sch_new" callback
-async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user = update.effective_user
-
-    if not is_admin(user.id):
-        await query.answer("⛔ دسترسی غیرمجاز!", show_alert=True)
-        return
-
-    state, d = get_state(ctx)
-
-    if data == "sch_new":
-        templates = db.get_templates()
-        if not templates:
-            await query.edit_message_text(
-                "❌ **هنوز پیامی کانفیگ نشده!**\n\n"
-                "ابتدا از بخش «تنظیمات پیام‌ها» یک پیام بسازید.",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⚙️ تنظیمات پیام‌ها", callback_data="config")],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")],
-                ]),
-            )
-            return
-
-        rows = []
-        for t in templates:
-            rows.append([InlineKeyboardButton(f"📋 {t['name']}", callback_data=f"sch_tpl_{t['id']}")])
-        rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="schedule")])
-
-        await query.edit_message_text(
-            "⏰ **زمان‌بندی جدید**\n\nیک پیام رو انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(rows),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
-
-    # All other callbacks handled by the main callback_handler
-    # This is a re-implementation - see below
-    pass
-
-
-# Override the callback handler to include all logic
-# (We need to handle sch_new in the main handler too)
-# This will be merged into the main callback_handler
 
 
 async def schedule_set_times(update, ctx, tpl_id):
