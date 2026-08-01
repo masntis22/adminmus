@@ -57,6 +57,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 import database as db
+from music_tools import MusicTools
 
 # ─── Config ───────────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
@@ -65,6 +66,9 @@ ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.str
 BASE_DIR = Path(__file__).parent
 TEMP_DIR = BASE_DIR / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
+
+# Initialize music tools / مقداردهی ابزار موزیک
+music = MusicTools(str(TEMP_DIR))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -98,6 +102,18 @@ def get_state(ctx):
 def clear_state(ctx):
     ctx.user_data.pop("state", None)
     ctx.user_data.pop("d", None)
+
+
+def parse_time(time_str: str) -> float:
+    """Parse time string to seconds / تبدیل رشته زمان به ثانیه"""
+    time_str = time_str.strip()
+    if ":" in time_str:
+        parts = time_str.split(":")
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        elif len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    return float(time_str)
 
 
 # ─── /start ───────────────────────────────────────────────────
@@ -207,12 +223,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await schedule_delete(update, ctx, sch_id)
 
     # ── Music edit flow ──
-    elif data == "music_change_title":
-        await music_ask_title(update, ctx)
-    elif data == "music_change_artist":
-        await music_ask_artist(update, ctx)
-    elif data == "music_change_cover":
-        await music_ask_cover(update, ctx)
+    elif data.startswith("mt_") or data.startswith("mtm_") or data.startswith("mtc_") or data.startswith("mtf_") or data.startswith("mtv_"):
+        await music_tools_callback(update, ctx)
     elif data == "music_done":
         await music_finish(update, ctx)
     elif data == "music_cancel":
@@ -592,83 +604,281 @@ async def schedule_delete(update, ctx, sch_id):
 # ══════════════════════════════════════════════════════════════
 
 async def flow_edit_music(update, ctx):
-    set_state(ctx, "music_waiting")
+    """Show music tools menu / نمایش منوی ابزار موزیک"""
+    keyboard = [
+        [InlineKeyboardButton("📝 ویرایش متادیتا", callback_data="mt_meta")],
+        [InlineKeyboardButton("🖼️ مدیریت کاور", callback_data="mt_cover")],
+        [InlineKeyboardButton("🔄 تبدیل فرمت", callback_data="mt_convert")],
+        [InlineKeyboardButton("🔊 تنظیم صدا", callback_data="mt_volume")],
+        [InlineKeyboardButton("✂️ برش صدا", callback_data="mt_trim")],
+        [InlineKeyboardButton("📋 نمایش اطلاعات", callback_data="mt_info")],
+        [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
+    ]
     await update.callback_query.edit_message_text(
-        "🎵 **ویرایش موزیک**\n\n"
-        "یک فایل صوتی بفرستید تا متادیتای اون رو ویرایش کنید.\n\n"
-        "📌 قابلیت‌ها:\n"
-        "• تغییر نام آهنگ\n"
-        "• تغییر نام هنرمند\n"
-        "• تغییر کاور آرت",
+        "🎵 **ابزار ویرایش موزیک**\n\n"
+        "یک فایل صوتی بفرستید، سپس ابزار مورد نظر رو انتخاب کنید.\n\n"
+        "📌 **قابلیت‌ها:**\n"
+        "📝 ویرایش متادیتا (عنوان، هنرمند، آلبوم، سال، ژانر)\n"
+        "🖼️ مدیریت کاور آرت\n"
+        "🔄 تبدیل فرمت (MP3, M4A, FLAC, WAV)\n"
+        "🔊 تنظیم صدا و نرمال‌سازی\n"
+        "✂️ برش صدا\n"
+        "📋 نمایش کامل اطلاعات",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
-        ]),
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
 async def music_received(update, ctx, message):
-    """Handle received audio file for editing."""
+    """Handle received audio file / دریافت فایل صوتی"""
     state, d = get_state(ctx)
     if state != "music_waiting":
         return
 
-    audio = message.audio or message.document
-    if not audio:
+    audio_msg = message.audio or message.document
+    if not audio_msg:
         await message.reply_text("❌ لطفاً یک فایل صوتی بفرستید.")
         return
 
     # Download file
-    file = await ctx.bot.get_file(audio.file_id)
+    file = await ctx.bot.get_file(audio_msg.file_id)
     ext = os.path.splitext(file.file_path)[1] or ".mp3"
-    tmp_path = TEMP_DIR / f"{uuid.uuid4().hex}{ext}"
-    await file.download_to_drive(str(tmp_path))
+    tmp_path = str(TEMP_DIR / f"{uuid.uuid4().hex}{ext}")
+    await file.download_to_drive(tmp_path)
 
-    # Read metadata
-    try:
-        audio_file = EasyID3(str(tmp_path))
-        title = audio_file.get("title", ["نامشخص"])[0]
-        artist = audio_file.get("artist", ["نامشخص"])[0]
-    except Exception:
-        title = audio.title or "نامشخص"
-        artist = "نامشخص"
-
-    # Check for cover art
-    has_cover = False
-    try:
-        af = ID3(str(tmp_path))
-        has_cover = any(k.startswith("APIC") for k in af.keys())
-    except Exception:
-        pass
+    # Get metadata using music_tools
+    meta = music.get_metadata(tmp_path)
 
     # Save state
     set_state(ctx, "music_editing",
-              file_id=audio.file_id,
-              file_path=str(tmp_path),
-              title=title,
-              artist=artist,
-              has_cover=has_cover)
+              file_id=audio_msg.file_id,
+              file_path=tmp_path,
+              title=meta["title"],
+              artist=meta["artist"],
+              album=meta["album"],
+              year=meta["year"],
+              genre=meta["genre"],
+              has_cover=meta["has_cover"])
+
+    await show_music_edit_menu(update, ctx, f"✅ فایل دریافت شد ({meta['format'].upper()})")
+
+
+async def show_music_edit_menu(update, ctx, status_msg=""):
+    """Show music editing menu / نمایش منوی ویرایش موزیک"""
+    state, d = get_state(ctx)
+    meta = music.get_metadata(d.get("file_path", ""))
+
+    prefix = f"{status_msg}\n\n" if status_msg else ""
 
     keyboard = [
-        [InlineKeyboardButton(f"✏️ عنوان: {title}", callback_data="music_change_title")],
-        [InlineKeyboardButton(f"🎤 هنرمند: {artist}", callback_data="music_change_artist")],
-        [InlineKeyboardButton(
-            "🖼️ تغییر کاور" if has_cover else "🖼️ اضافه کاور",
-            callback_data="music_change_cover"
-        )],
+        [InlineKeyboardButton("📝 ویرایش متادیتا", callback_data="mt_meta")],
+        [InlineKeyboardButton("🖼️ مدیریت کاور", callback_data="mt_cover")],
+        [InlineKeyboardButton("🔄 تبدیل فرمت", callback_data="mt_convert")],
+        [InlineKeyboardButton("🔊 تنظیم صدا", callback_data="mt_volume")],
+        [InlineKeyboardButton("✂️ برش صدا", callback_data="mt_trim")],
+        [InlineKeyboardButton("📋 نمایش اطلاعات", callback_data="mt_info")],
         [InlineKeyboardButton("✅ ذخیره و ارسال", callback_data="music_done")],
         [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
     ]
 
-    await message.reply_text(
-        f"🎵 **ویرایش موزیک**\n\n"
-        f"📌 **عنوان:** {title}\n"
-        f"🎤 **هنرمند:** {artist}\n"
-        f"🖼️ **کاور:** {'✅ دارد' if has_cover else '❌ ندارد'}\n\n"
-        f"چه چیزی رو می‌خواید تغییر بدید؟",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    duration_str = music._format_duration(meta["duration"])
+
+    await update.callback_query.edit_message_text(
+        f"{prefix}🎵 **ابزار موزیک**\n\n"
+        f"📌 عنوان: {meta['title'] or '(خالی)'}\n"
+        f"🎤 هنرمند: {meta['artist'] or '(خالی)'}\n"
+        f"💿 آلبوم: {meta['album'] or '(خالی)'}\n"
+        f"📅 سال: {meta['year'] or '(خالی)'}\n"
+        f"🎵 ژانر: {meta['genre'] or '(خالی)'}\n"
+        f"🖼️ کاور: {'✅' if meta['has_cover'] else '❌'}\n"
+        f"⏱️ مدت: {duration_str}\n"
+        f"📁 فرمت: {meta['format'].upper()}",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+
+# ─── Music Tools Callbacks ────────────────────────────────────
+
+async def music_tools_callback(update, ctx):
+    """Handle music tools callbacks / مدیریت کالبک‌های ابزار موزیک"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    state, d = get_state(ctx)
+
+    file_path = d.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        await query.edit_message_text("❌ فایل یافت نشد. دوباره موزیک بفرستید.")
+        clear_state(ctx)
+        return
+
+    # ── Metadata editing ──
+    if data == "mt_meta":
+        keyboard = [
+            [InlineKeyboardButton("✏️ عنوان", callback_data="mtm_title"),
+             InlineKeyboardButton("🎤 هنرمند", callback_data="mtm_artist")],
+            [InlineKeyboardButton("💿 آلبوم", callback_data="mtm_album"),
+             InlineKeyboardButton("📅 سال", callback_data="mtm_year")],
+            [InlineKeyboardButton("🎵 ژانر", callback_data="mtm_genre")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="mt_back")],
+        ]
+        await query.edit_message_text(
+            "📝 **ویرایش متادیتا**\n\nکدوم فیلد رو می‌خواید تغییر بدید؟",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data.startswith("mtm_"):
+        field = data.replace("mtm_", "")
+        field_names = {
+            "title": "عنوان", "artist": "هنرمند", "album": "آلبوم",
+            "year": "سال", "genre": "ژانر",
+        }
+        set_state(ctx, f"music_changing_{field}", **d)
+        await query.edit_message_text(
+            f"✏️ **{field_names.get(field, field)} جدید رو بفرستید:**",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ لغو", callback_data="mt_back")],
+            ]),
+        )
+
+    # ── Cover art ──
+    elif data == "mt_cover":
+        keyboard = [
+            [InlineKeyboardButton("🔄 تغییر کاور", callback_data="mtc_change")],
+            [InlineKeyboardButton("🗑️ حذف کاور", callback_data="mtc_remove")],
+            [InlineKeyboardButton("📥 استخراج کاور", callback_data="mtc_extract")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="mt_back")],
+        ]
+        has_cover = d.get("has_cover", False)
+        await query.edit_message_text(
+            f"🖼️ **مدیریت کاور**\n\n"
+            f"وضعیت فعلی: {'✅ کاور دارد' if has_cover else '❌ بدون کاور'}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data == "mtc_change":
+        set_state(ctx, "music_waiting_cover", **d)
+        await query.edit_message_text(
+            "🖼️ **عکس کاور جدید رو بفرستید:**",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ لغو", callback_data="mt_back")],
+            ]),
+        )
+
+    elif data == "mtc_remove":
+        if music.remove_cover(file_path):
+            ctx.user_data["d"]["has_cover"] = False
+            await show_music_edit_menu(update, ctx, "✅ کاور حذف شد")
+        else:
+            await query.answer("❌ خطا در حذف کاور!", show_alert=True)
+
+    elif data == "mtc_extract":
+        cover_path = str(TEMP_DIR / f"cover_{uuid.uuid4().hex}.jpg")
+        if music.save_cover_to_file(file_path, cover_path):
+            with open(cover_path, "rb") as f:
+                await query.message.reply_photo(
+                    photo=f, caption="🖼️ کاور استخراج شده"
+                )
+            music.cleanup(cover_path)
+        else:
+            await query.answer("❌ کاوری برای استخراج وجود ندارد!", show_alert=True)
+
+    # ── Format conversion ──
+    elif data == "mt_convert":
+        keyboard = [
+            [InlineKeyboardButton("MP3 128kbps", callback_data="mtf_mp3_128"),
+             InlineKeyboardButton("MP3 320kbps", callback_data="mtf_mp3_320")],
+            [InlineKeyboardButton("M4A", callback_data="mtf_m4a_256"),
+             InlineKeyboardButton("FLAC", callback_data="mtf_flac_0")],
+            [InlineKeyboardButton("WAV", callback_data="mtf_wav_0")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="mt_back")],
+        ]
+        await query.edit_message_text(
+            "🔄 **تبدیل فرمت**\n\nفرمت خروجی رو انتخاب کنید:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data.startswith("mtf_"):
+        parts = data.replace("mtf_", "").split("_")
+        fmt = parts[0]
+        bitrate = parts[1] if len(parts) > 1 else "320"
+
+        await query.edit_message_text(f"🔄 در حال تبدیل به {fmt.upper()}...")
+
+        output = music.convert_format(file_path, fmt, bitrate)
+        if output:
+            ctx.user_data["d"]["file_path"] = output
+            ctx.user_data["d"]["converted_format"] = fmt
+            await show_music_edit_menu(update, ctx, f"✅ تبدیل به {fmt.upper()} انجام شد")
+        else:
+            await show_music_edit_menu(update, ctx, "❌ خطا در تبدیل فرمت")
+
+    # ── Volume ──
+    elif data == "mt_volume":
+        keyboard = [
+            [InlineKeyboardButton("🔊 +3dB", callback_data="mtv_3"),
+             InlineKeyboardButton("🔊 +6dB", callback_data="mtv_6")],
+            [InlineKeyboardButton("🔉 -3dB", callback_data="mtv_-3"),
+             InlineKeyboardButton("🔉 -6dB", callback_data="mtv_-6")],
+            [InlineKeyboardButton("📏 نرمال‌سازی", callback_data="mtv_norm")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="mt_back")],
+        ]
+        await query.edit_message_text(
+            "🔊 **تنظیم صدا**\n\nعملیات مورد نظر رو انتخاب کنید:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data.startswith("mtv_"):
+        action = data.replace("mtv_", "")
+
+        await query.edit_message_text("🔊 در حال پردازش...")
+
+        if action == "norm":
+            output = music.normalize_volume(file_path)
+        else:
+            db_val = float(action)
+            output = music.change_volume(file_path, db_val)
+
+        if output:
+            ctx.user_data["d"]["file_path"] = output
+            await show_music_edit_menu(update, ctx, "✅ تنظیم صدا انجام شد")
+        else:
+            await show_music_edit_menu(update, ctx, "❌ خطا در تنظیم صدا")
+
+    # ── Trim ──
+    elif data == "mt_trim":
+        set_state(ctx, "music_trim_start", **d)
+        await query.edit_message_text(
+            "✂️ **برش صدا**\n\n"
+            "زمان شروع رو بفرستید (ثانیه):\n"
+            "مثال: `10` یا `1:30`",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ لغو", callback_data="mt_back")],
+            ]),
+        )
+
+    # ── Info ──
+    elif data == "mt_info":
+        info_text = music.get_metadata_text(file_path)
+        await query.edit_message_text(
+            info_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="mt_back")],
+            ]),
+        )
+
+    # ── Back to main music menu ──
+    elif data == "mt_back":
+        await show_music_edit_menu(update, ctx)
 
 
 async def music_ask_title(update, ctx):
@@ -678,7 +888,7 @@ async def music_ask_title(update, ctx):
         "✏️ **عنوان جدید رو بفرستید:**",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
+            [InlineKeyboardButton("❌ لغو", callback_data="mt_back")],
         ]),
     )
 
@@ -690,7 +900,7 @@ async def music_ask_artist(update, ctx):
         "🎤 **نام هنرمند جدید رو بفرستید:**",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
+            [InlineKeyboardButton("❌ لغو", callback_data="mt_back")],
         ]),
     )
 
@@ -702,53 +912,36 @@ async def music_ask_cover(update, ctx):
         "🖼️ **عکس کاور جدید رو بفرستید:**",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
+            [InlineKeyboardButton("❌ لغو", callback_data="mt_back")],
         ]),
     )
 
 
 async def music_apply_changes(update, ctx):
-    """Apply all metadata changes to the file."""
+    """Apply all metadata changes / اعمال تمام تغییرات متادیتا"""
     state, d = get_state(ctx)
     file_path = d.get("file_path")
     if not file_path or not os.path.exists(file_path):
-        await update.message.reply_text("❌ فایل یافت نشد. دوباره موزیک بفرستید.")
-        clear_state(ctx)
         return
 
-    try:
-        audio = EasyID3(file_path)
-        audio["title"] = d.get("title", "نامشخص")
-        audio["artist"] = d.get("artist", "نامشخص")
-        audio.save()
-    except Exception:
-        pass
+    # Apply metadata
+    music.set_metadata(
+        file_path,
+        title=d.get("title"),
+        artist=d.get("artist"),
+        album=d.get("album"),
+        year=d.get("year"),
+        genre=d.get("genre"),
+    )
 
-    # Apply cover art if changed
+    # Apply cover art
     cover_path = d.get("cover_path")
     if cover_path and os.path.exists(cover_path):
-        try:
-            af = ID3(file_path)
-            # Remove old cover
-            af.delall("APIC")
-            # Add new cover
-            with open(cover_path, "rb") as f:
-                cover_data = f.read()
-            af.add(APIC(
-                encoding=3,
-                mime="image/jpeg",
-                type=3,
-                desc="Cover",
-                data=cover_data,
-            ))
-            af.save()
-        except Exception as e:
-            logger.warning(f"Cover art error: {e}")
-
-    return file_path
+        music.set_cover(file_path, cover_path)
 
 
 async def music_finish(update, ctx):
+    """Finish editing and send / پایان ویرایش و ارسال"""
     state, d = get_state(ctx)
     file_path = d.get("file_path")
 
@@ -762,8 +955,9 @@ async def music_finish(update, ctx):
 
     # Send back to admin
     try:
-        title = d.get("title", "Unknown")
-        artist = d.get("artist", "Unknown")
+        meta = music.get_metadata(file_path)
+        title = meta["title"] or "Unknown"
+        artist = meta["artist"] or "Unknown"
 
         with open(file_path, "rb") as f:
             await update.callback_query.message.reply_audio(
@@ -776,7 +970,8 @@ async def music_finish(update, ctx):
         await update.callback_query.edit_message_text(
             f"✅ **موزیک با موفقیت ویرایش شد!**\n\n"
             f"📌 عنوان: {title}\n"
-            f"🎤 هنرمند: {artist}",
+            f"🎤 هنرمند: {artist}\n"
+            f"📁 فرمت: {meta['format'].upper()}",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎵 ویرایش مجدد", callback_data="edit_music")],
@@ -791,14 +986,7 @@ async def music_finish(update, ctx):
         )
 
     # Cleanup
-    try:
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-        cover_path = d.get("cover_path")
-        if cover_path and os.path.exists(cover_path):
-            os.remove(cover_path)
-    except Exception:
-        pass
+    music.cleanup(file_path, d.get("cover_path"))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1157,6 +1345,57 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await show_music_edit_menu(update, ctx, "✅ هنرمند تغییر کرد")
         return
 
+    if state == "music_changing_album":
+        ctx.user_data["d"]["album"] = text.strip()
+        set_state(ctx, "music_editing", **ctx.user_data["d"])
+        await show_music_edit_menu(update, ctx, "✅ آلبوم تغییر کرد")
+        return
+
+    if state == "music_changing_year":
+        ctx.user_data["d"]["year"] = text.strip()
+        set_state(ctx, "music_editing", **ctx.user_data["d"])
+        await show_music_edit_menu(update, ctx, "✅ سال تغییر کرد")
+        return
+
+    if state == "music_changing_genre":
+        ctx.user_data["d"]["genre"] = text.strip()
+        set_state(ctx, "music_editing", **ctx.user_data["d"])
+        await show_music_edit_menu(update, ctx, "✅ ژانر تغییر کرد")
+        return
+
+    if state == "music_trim_start":
+        try:
+            start = parse_time(text.strip())
+            ctx.user_data["d"]["trim_start"] = start
+            set_state(ctx, "music_trim_end", **ctx.user_data["d"])
+            await update.message.reply_text(
+                "✂️ **زمان پایان رو بفرستید:**\n"
+                "(برای برش تا انتها `0` بفرستید)",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except ValueError:
+            await update.message.reply_text("❌ فرمت نامعتبر! مثال: `10` یا `1:30`")
+        return
+
+    if state == "music_trim_end":
+        try:
+            end = parse_time(text.strip())
+            start = ctx.user_data["d"].get("trim_start", 0)
+            file_path = ctx.user_data["d"].get("file_path")
+
+            await update.message.reply_text("✂️ در حال برش...")
+
+            output = music.trim(file_path, start, end)
+            if output:
+                ctx.user_data["d"]["file_path"] = output
+                set_state(ctx, "music_editing", **ctx.user_data["d"])
+                await show_music_edit_menu(update, ctx, "✅ برش انجام شد")
+            else:
+                await show_music_edit_menu(update, ctx, "❌ خطا در برش")
+        except ValueError:
+            await update.message.reply_text("❌ فرمت نامعتبر! مثال: `30` یا `2:00`")
+        return
+
     # Default: if no state, check if it's a download request
     if not state:
         await update.message.reply_text(
@@ -1165,36 +1404,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🏠 شروع", callback_data="main_menu")],
             ]),
         )
-
-
-async def show_music_edit_menu(update, ctx, status_msg=""):
-    state, d = get_state(ctx)
-    title = d.get("title", "نامشخص")
-    artist = d.get("artist", "نامشخص")
-    has_cover = d.get("has_cover", False)
-
-    prefix = f"{status_msg}\n\n" if status_msg else ""
-
-    keyboard = [
-        [InlineKeyboardButton(f"✏️ عنوان: {title}", callback_data="music_change_title")],
-        [InlineKeyboardButton(f"🎤 هنرمند: {artist}", callback_data="music_change_artist")],
-        [InlineKeyboardButton(
-            "🖼️ تغییر کاور" if has_cover else "🖼️ اضافه کاور",
-            callback_data="music_change_cover"
-        )],
-        [InlineKeyboardButton("✅ ذخیره و ارسال", callback_data="music_done")],
-        [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
-    ]
-
-    await update.message.reply_text(
-        f"{prefix}🎵 **ویرایش موزیک**\n\n"
-        f"📌 **عنوان:** {title}\n"
-        f"🎤 **هنرمند:** {artist}\n"
-        f"🖼️ **کاور:** {'✅ دارد' if has_cover else '❌ ندارد'}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
 
 async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
