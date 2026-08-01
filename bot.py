@@ -1217,34 +1217,13 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cover_path = str(TEMP_DIR / f"cover_{uuid.uuid4().hex}.jpg")
             await file.download_to_drive(cover_path)
 
-            # Apply cover immediately
-            file_path = d.get("file_path")
-            if file_path and os.path.exists(file_path):
-                try:
-                    af = ID3(file_path)
-                    af.delall("APIC")
-                    with open(cover_path, "rb") as f:
-                        cover_data = f.read()
-                    af.add(APIC(
-                        encoding=3,
-                        mime="image/jpeg",
-                        type=3,
-                        desc="Cover",
-                        data=cover_data,
-                    ))
-                    af.save()
+            # Store cover path - will be applied when user clicks "done"
+            ctx.user_data["d"]["has_cover"] = True
+            ctx.user_data["d"]["cover_path"] = cover_path
+            set_state(ctx, "music_editing", **ctx.user_data["d"])
 
-                    ctx.user_data["d"]["has_cover"] = True
-                    ctx.user_data["d"]["cover_path"] = cover_path
-                    set_state(ctx, "music_editing", **ctx.user_data["d"])
-
-                    await show_music_edit_menu(update, ctx, "✅ کاور تغییر کرد")
-                    return
-                except Exception as e:
-                    logger.error(f"Cover apply error: {e}")
-                    await message.reply_text("❌ خطا در اعمال کاور.")
-            else:
-                await message.reply_text("❌ فایل موزیک یافت نشد.")
+            await show_music_edit_menu(update, ctx, "✅ کاور جدید دریافت شد. روی «ذخیره و ارسال» بزنید.")
+            return
         else:
             await message.reply_text("❌ لطفاً یک عکس بفرستید.")
         return
