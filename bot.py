@@ -58,6 +58,8 @@ from telegram.error import TelegramError
 
 import database as db
 from music_tools import MusicTools
+from auto_music import AutoMusic
+from demo_music import DemoMusic
 
 # ─── Config ───────────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
@@ -69,6 +71,8 @@ TEMP_DIR.mkdir(exist_ok=True)
 
 # Initialize music tools / مقداردهی ابزار موزیک
 music = MusicTools(str(TEMP_DIR))
+auto = AutoMusic()
+demo = DemoMusic(str(TEMP_DIR))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -611,6 +615,8 @@ async def flow_edit_music(update, ctx):
         [InlineKeyboardButton("🔄 تبدیل فرمت", callback_data="mt_convert")],
         [InlineKeyboardButton("🔊 تنظیم صدا", callback_data="mt_volume")],
         [InlineKeyboardButton("✂️ برش صدا", callback_data="mt_trim")],
+        [InlineKeyboardButton("🤖 اتو موزیک", callback_data="mt_auto")],
+        [InlineKeyboardButton("🎬 دمو موزیک", callback_data="mt_demo")],
         [InlineKeyboardButton("📋 نمایش اطلاعات", callback_data="mt_info")],
         [InlineKeyboardButton("❌ لغو", callback_data="music_cancel")],
     ]
@@ -873,6 +879,38 @@ async def music_tools_callback(update, ctx):
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 بازگشت", callback_data="mt_back")],
+            ]),
+        )
+
+    # ── Auto Music (Mood & Hashtags) ──
+    elif data == "mt_auto":
+        await query.edit_message_text("🤖 در حال تحلیل مود موزیک...")
+        try:
+            result = auto.format_hashtags_text(file_path)
+            await query.edit_message_text(
+                result,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 تحلیل مجدد", callback_data="mt_auto")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="mt_back")],
+                ]),
+            )
+        except Exception as e:
+            logger.error(f"Auto music error: {e}")
+            await show_music_edit_menu(update, ctx, "❌ خطا در تحلیل مود")
+
+    # ── Demo Music ──
+    elif data == "mt_demo":
+        set_state(ctx, "demo_waiting_start", **d)
+        await query.edit_message_text(
+            "🎬 **ساخت دموی موزیک**\n\n"
+            "زمان شروع رو بفرستید (ثانیه):\n"
+            "مثال: `10` یا `1:30`\n\n"
+            "⏱️ **اطلاعات موزیک:**\n"
+            f"مدت کل: {music._format_duration(music.get_metadata(file_path)['duration'])}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ لغو", callback_data="mt_back")],
             ]),
         )
 
@@ -1392,6 +1430,47 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await show_music_edit_menu(update, ctx, "✅ برش انجام شد")
             else:
                 await show_music_edit_menu(update, ctx, "❌ خطا در برش")
+        except ValueError:
+            await update.message.reply_text("❌ فرمت نامعتبر! مثال: `30` یا `2:00`")
+        return
+
+    # ── Demo music states ──
+    if state == "demo_waiting_start":
+        try:
+            start = parse_time(text.strip())
+            ctx.user_data["d"]["demo_start"] = start
+            set_state(ctx, "demo_waiting_end", **ctx.user_data["d"])
+            await update.message.reply_text(
+                "🎬 **زمان پایان دمو رو بفرستید:**\n"
+                "(برای دمو تا انتها `0` بفرستید)",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except ValueError:
+            await update.message.reply_text("❌ فرمت نامعتبر! مثال: `10` یا `1:30`")
+        return
+
+    if state == "demo_waiting_end":
+        try:
+            end = parse_time(text.strip())
+            start = ctx.user_data["d"].get("demo_start", 0)
+            file_path = ctx.user_data["d"].get("file_path")
+
+            await update.message.reply_text("🎬 در حال ساخت دمو...")
+
+            # Create voice demo (OGG)
+            output = demo.create_voice_demo(file_path, start, end)
+            if output:
+                # Send as voice message
+                with open(output, "rb") as f:
+                    await update.message.reply_voice(
+                        voice=f,
+                        caption=f"🎬 دمو: {music._format_duration(start)} - {music._format_duration(end)}",
+                    )
+                demo.cleanup(output)
+                set_state(ctx, "music_editing", **ctx.user_data["d"])
+                await show_music_edit_menu(update, ctx, "✅ دمو ساخته شد")
+            else:
+                await show_music_edit_menu(update, ctx, "❌ خطا در ساخت دمو")
         except ValueError:
             await update.message.reply_text("❌ فرمت نامعتبر! مثال: `30` یا `2:00`")
         return
