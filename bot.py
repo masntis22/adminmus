@@ -100,6 +100,96 @@ def clear_state(ctx):
     ctx.user_data.pop("d", None)
 
 
+async def send_cover_from_audio(bot, chat_id, audio_file_id):
+    """Extract cover art from audio and send as photo.
+    استخراج کاور آرت از فایل صوتی و ارسال به عنوان عکس."""
+    import tempfile
+    from mutagen.id3 import ID3
+
+    tmp_path = None
+    try:
+        # Download audio to temp file
+        file = await bot.get_file(audio_file_id)
+        tmp_path = tempfile.mktemp(suffix=".mp3")
+        await file.download_to_drive(tmp_path)
+
+        # Extract cover
+        af = ID3(tmp_path)
+        cover_tags = [k for k in af.keys() if k.startswith("APIC")]
+        if not cover_tags:
+            return False
+
+        cover_data = af[cover_tags[0]].data
+        if not cover_data or len(cover_data) < 100:
+            return False
+
+        # Save cover to temp file
+        cover_path = tempfile.mktemp(suffix=".jpg")
+        with open(cover_path, "wb") as f:
+            f.write(cover_data)
+
+        # Send cover as photo
+        with open(cover_path, "rb") as f:
+            await bot.send_photo(chat_id=chat_id, photo=f)
+
+        # Cleanup cover temp
+        try:
+            os.remove(cover_path)
+        except Exception:
+            pass
+
+        return True
+
+    except Exception as e:
+        logger.warning(f"Cover extraction failed: {e}")
+        return False
+
+    finally:
+        # Cleanup audio temp
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+async def send_cover_from_audio_file(bot, chat_id, file_path):
+    """Extract cover art from local audio file and send as photo.
+    استخراج کاور آرت از فایل صوتی محلی و ارسال به عنوان عکس."""
+    try:
+        from mutagen.id3 import ID3
+
+        af = ID3(file_path)
+        cover_tags = [k for k in af.keys() if k.startswith("APIC")]
+        if not cover_tags:
+            return False
+
+        cover_data = af[cover_tags[0]].data
+        if not cover_data or len(cover_data) < 100:
+            return False
+
+        # Save cover to temp file
+        cover_path = tempfile.mktemp(suffix=".jpg")
+        with open(cover_path, "wb") as f:
+            f.write(cover_data)
+
+        # Send cover as photo
+        with open(cover_path, "rb") as f:
+            await bot.send_photo(chat_id=chat_id, photo=f)
+
+        # Cleanup
+        try:
+            os.remove(cover_path)
+        except Exception:
+            pass
+
+        return True
+
+    except Exception as e:
+        logger.warning(f"Cover extraction from file failed: {e}")
+        return False
+
+
 # ─── /start ───────────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -363,6 +453,9 @@ async def send_now_confirm(update, ctx):
 
         # Send music if exists
         if tpl["music_file_id"]:
+            # Try to extract and send cover art first
+            cover_sent = await send_cover_from_audio(bot, ch_id, tpl["music_file_id"])
+            # Then send audio
             await bot.send_audio(chat_id=ch_id, audio=tpl["music_file_id"])
 
         clear_state(ctx)
@@ -765,6 +858,10 @@ async def music_finish(update, ctx):
         title = d.get("title", "Unknown")
         artist = d.get("artist", "Unknown")
 
+        # Extract and send cover art first
+        await send_cover_from_audio_file(ctx.bot, update.callback_query.message.chat_id, file_path)
+
+        # Then send audio
         with open(file_path, "rb") as f:
             await update.callback_query.message.reply_audio(
                 audio=f,
